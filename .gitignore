@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+streamlit.err
+streamlit.out
+streamlit_cmd.err
+streamlit_cmd.out
+streamlit_live.err
+streamlit_live.out
+streamlit_persist.err
+streamlit_persist.out

@@ -1,0 +1,16 @@
+VS Code Terminal Only
+
+Open the project folder in VS Code, then open the integrated terminal.
+
+Run:
+
+cd "C:\Users\jaypr\Desktop\coding\project\DS HOT"
+py -m streamlit run app.py --server.port 8501
+
+If port 8501 is busy, run:
+
+py -m streamlit run app.py --server.port 8502
+
+Stop the app from the VS Code terminal with:
+
+Ctrl + C
