@@ -89,40 +89,96 @@ def inject_styles() -> None:
             }
 
             [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #0f172a 0%, #102542 100%);
-                color: #f8fafc;
+                background: linear-gradient(180deg, #ffffff 0%, #eef4ff 100%);
+                border-right: 1px solid #d8e5f5;
+                color: #0f172a;
             }
 
-            [data-testid="stSidebar"] *,
-            [data-testid="stSidebar"] .stMarkdown,
-            [data-testid="stSidebar"] label,
-            [data-testid="stSidebar"] .stCaption,
+            [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+                padding-top: 1rem;
+            }
+
+            [data-testid="stSidebar"] h1,
+            [data-testid="stSidebar"] h2,
+            [data-testid="stSidebar"] h3,
             [data-testid="stSidebar"] p,
+            [data-testid="stSidebar"] label,
             [data-testid="stSidebar"] span,
-            [data-testid="stSidebar"] div {
-                color: #e2e8f0 !important;
+            [data-testid="stSidebar"] div,
+            [data-testid="stSidebar"] small {
+                color: #0f172a !important;
+            }
+
+            [data-testid="stSidebar"] .stCaption,
+            [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+                color: #475569 !important;
+            }
+
+            [data-testid="stSidebar"] .stRadio > label,
+            [data-testid="stSidebar"] .stSlider > label,
+            [data-testid="stSidebar"] .stSelectbox > label,
+            [data-testid="stSidebar"] .stFileUploader > label,
+            [data-testid="stSidebar"] .stExpander > label {
+                color: #0f172a !important;
+                font-weight: 700 !important;
+            }
+
+            [data-testid="stSidebar"] [data-baseweb="radio"] label {
+                color: #0f172a !important;
+                font-weight: 500 !important;
             }
 
             [data-testid="stSidebar"] [data-baseweb="select"] > div,
             [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-                background: #f8fafc !important;
+                background: #ffffff !important;
                 color: #0f172a !important;
-                border: 1px solid rgba(255, 255, 255, 0.18) !important;
+                border: 1px solid #c7d7ea !important;
+                box-shadow: 0 8px 18px rgba(20, 89, 217, 0.06);
             }
 
             [data-testid="stSidebar"] .stTextInput input,
             [data-testid="stSidebar"] .stNumberInput input,
             [data-testid="stSidebar"] textarea {
-                background: #f8fafc !important;
+                background: #ffffff !important;
                 color: #0f172a !important;
+                border: 1px solid #c7d7ea !important;
             }
 
-            [data-testid="stSidebar"] .stRadio label,
-            [data-testid="stSidebar"] .stSlider label,
-            [data-testid="stSidebar"] .stSelectbox label,
-            [data-testid="stSidebar"] .stExpander label {
-                color: #f8fafc !important;
-                font-weight: 600;
+            [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+                background: #ffffff !important;
+                border: 2px dashed #bfd3ef !important;
+                border-radius: 18px !important;
+                padding: 1rem !important;
+            }
+
+            [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {
+                color: #475569 !important;
+            }
+
+            [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] {
+                background: #ffffff !important;
+                color: #1459d9 !important;
+                border: 1px solid #bfd3ef !important;
+            }
+
+            [data-testid="stSidebar"] [data-baseweb="slider"] [role="slider"] {
+                background: #1459d9 !important;
+                border-color: #1459d9 !important;
+            }
+
+            [data-testid="stSidebar"] [data-baseweb="slider"] > div > div {
+                background: #1459d9 !important;
+            }
+
+            [data-testid="stSidebar"] input[type="radio"] {
+                accent-color: #1459d9;
+            }
+
+            [data-testid="stSidebar"] details {
+                background: rgba(255, 255, 255, 0.75);
+                border: 1px solid #d8e5f5;
+                border-radius: 14px;
+                padding: 0.2rem 0.4rem;
             }
 
             .hero-card {
