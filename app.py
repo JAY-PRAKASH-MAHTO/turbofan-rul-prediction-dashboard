@@ -1,433 +1,506 @@
-"""Streamlit dashboard for NASA CMAPSS Remaining Useful Life prediction."""
+"""Industry-grade Streamlit dashboard for turbofan Remaining Useful Life prediction."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
-from preprocess import get_sensor_curve
-from train import train_and_evaluate
+from utils.preprocess import (
+    DEFAULT_SEQUENCE_LENGTH,
+    InvalidSchemaError,
+    InsufficientCyclesError,
+    UPLOAD_REQUIRED_COLUMNS,
+    load_data,
+    load_demo_dataset,
+    prepare_inference_data,
+)
+from utils.predict import (
+    assess_training_range_deviation,
+    build_prediction_frame,
+    classify_risk,
+    load_model,
+    load_training_feature_bounds,
+    predict_rul,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_TRAIN = BASE_DIR / "data" / "train_FD001.txt"
-DEFAULT_TEST = BASE_DIR / "data" / "test_FD001.txt"
-DEFAULT_RUL = BASE_DIR / "data" / "RUL_FD001.txt"
-MODEL_PATH = BASE_DIR / "model.pkl"
-REPORTS_DIR = BASE_DIR / "reports"
+DATA_DIR = BASE_DIR / "data"
+DEMO_DATA_PATH = DATA_DIR / "test_FD001.txt"
+TRAIN_REFERENCE_PATH = DATA_DIR / "train_FD001.txt"
+DEFAULT_SENSOR = "sensor_11"
 
 
-def run_default_training() -> dict:
-    return train_and_evaluate(
-        DEFAULT_TRAIN,
-        DEFAULT_TEST,
-        DEFAULT_RUL,
-        model_output_path=MODEL_PATH,
-        reports_dir=REPORTS_DIR,
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+            :root {
+                --ink: #102542;
+                --muted: #5b6b7f;
+                --surface: #ffffff;
+                --border: #d9e3ef;
+                --shadow: 0 18px 45px rgba(16, 37, 66, 0.08);
+                --success: #12715b;
+                --warning: #b7791f;
+                --danger: #b42318;
+            }
+
+            .stApp {
+                background:
+                    radial-gradient(circle at top right, rgba(29, 78, 216, 0.08), transparent 28%),
+                    linear-gradient(180deg, #f7f9fc 0%, #eef3f9 100%);
+            }
+
+            .block-container {
+                padding-top: 2rem;
+                padding-bottom: 2rem;
+                max-width: 1400px;
+            }
+
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #0f172a 0%, #102542 100%);
+                color: #f8fafc;
+            }
+
+            [data-testid="stSidebar"] .stMarkdown,
+            [data-testid="stSidebar"] label,
+            [data-testid="stSidebar"] .stCaption {
+                color: #e2e8f0 !important;
+            }
+
+            .hero-card {
+                background:
+                    linear-gradient(135deg, rgba(16, 37, 66, 0.98), rgba(29, 78, 216, 0.9)),
+                    linear-gradient(180deg, #102542 0%, #1d4ed8 100%);
+                border-radius: 26px;
+                padding: 2rem 2.2rem;
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                box-shadow: var(--shadow);
+                color: #f8fafc;
+                margin-bottom: 1.5rem;
+            }
+
+            .hero-kicker {
+                display: inline-block;
+                padding: 0.3rem 0.75rem;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                font-size: 0.78rem;
+                letter-spacing: 0.03em;
+                text-transform: uppercase;
+                margin-bottom: 0.8rem;
+            }
+
+            .hero-title {
+                font-size: 2.2rem;
+                line-height: 1.15;
+                font-weight: 700;
+                margin: 0 0 0.4rem 0;
+            }
+
+            .hero-subtitle {
+                font-size: 1rem;
+                line-height: 1.6;
+                color: rgba(248, 250, 252, 0.88);
+                margin: 0;
+                max-width: 860px;
+            }
+
+            .summary-card {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 22px;
+                padding: 1.2rem 1.25rem;
+                box-shadow: var(--shadow);
+                height: 100%;
+            }
+
+            .summary-label {
+                color: var(--muted);
+                font-size: 0.86rem;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                margin: 0 0 0.55rem 0;
+            }
+
+            .summary-value {
+                color: var(--ink);
+                font-size: 2rem;
+                line-height: 1.1;
+                font-weight: 700;
+                margin: 0;
+            }
+
+            .summary-subtitle {
+                color: var(--muted);
+                margin: 0.45rem 0 0 0;
+                font-size: 0.95rem;
+            }
+
+            .status-pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                border-radius: 999px;
+                padding: 0.45rem 0.8rem;
+                font-weight: 600;
+                font-size: 0.92rem;
+                margin-top: 0.4rem;
+            }
+
+            .status-green {
+                background: rgba(18, 113, 91, 0.12);
+                color: var(--success);
+            }
+
+            .status-yellow {
+                background: rgba(183, 121, 31, 0.14);
+                color: var(--warning);
+            }
+
+            .status-red {
+                background: rgba(180, 35, 24, 0.12);
+                color: var(--danger);
+            }
+
+            .section-note {
+                color: var(--muted);
+                font-size: 0.95rem;
+                margin-top: 0.25rem;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
 
-def describe_feature(feature_name: str) -> tuple[str, str]:
-    """Return a short explanation and an interpretation hint for a feature."""
+def render_header() -> None:
+    st.markdown(
+        """
+        <section class="hero-card">
+            <div class="hero-kicker">Live inference dashboard</div>
+            <h1 class="hero-title">Turbofan Engine RUL Prediction Dashboard</h1>
+            <p class="hero-subtitle">
+                Upload fresh engine telemetry or compare against the NASA FD001 demo fleet.
+                The dashboard validates incoming data, applies the saved training scaler, predicts
+                Remaining Useful Life, and surfaces risk with a clean operations-facing view.
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if feature_name == "cycle":
-        return (
-            "Elapsed operating cycles for the engine.",
-            "This often acts as a direct aging signal because wear typically grows over time.",
+
+def render_empty_state() -> None:
+    with st.container(border=True):
+        st.subheader("Awaiting Engine Data")
+        st.write(
+            "Upload a CSV in the sidebar or switch to the demo engine mode to run the inference pipeline."
         )
+        st.caption("Expected CSV schema")
+        st.code(", ".join(UPLOAD_REQUIRED_COLUMNS), language="text")
 
-    if feature_name.startswith("setting_"):
-        return (
-            "Operational setting that changes the engine regime.",
-            "The model uses settings to separate true degradation from normal operating-condition shifts.",
+
+def render_summary_card(title: str, value: str, subtitle: str, accent: str) -> None:
+    st.markdown(
+        f"""
+        <div class="summary-card" style="border-top: 5px solid {accent};">
+            <p class="summary-label">{title}</p>
+            <p class="summary-value">{value}</p>
+            <p class="summary-subtitle">{subtitle}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_status_card(risk_summary: dict[str, str | float]) -> None:
+    risk_class = f"status-{risk_summary['level'].lower()}"
+    st.markdown(
+        f"""
+        <div class="summary-card" style="border-top: 5px solid {risk_summary['color']};">
+            <p class="summary-label">Risk Status</p>
+            <p class="summary-value">{risk_summary['label']}</p>
+            <div class="status-pill {risk_class}">{risk_summary['message']}</div>
+            <p class="summary-subtitle">Thresholds: Green &gt; 50, Yellow 20-50, Red &lt; 20</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def build_rul_trend_figure(prediction_frame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=prediction_frame["cycle"],
+            y=prediction_frame["upper_bound"],
+            mode="lines",
+            line={"width": 0},
+            hoverinfo="skip",
+            showlegend=False,
         )
-
-    if "_roll_mean_" in feature_name:
-        sensor_name = feature_name.split("_roll_mean_")[0]
-        return (
-            f"Five-cycle rolling mean for {sensor_name}.",
-            "A smoothed sensor level helps the model focus on persistent degradation instead of noise.",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=prediction_frame["cycle"],
+            y=prediction_frame["lower_bound"],
+            mode="lines",
+            line={"width": 0},
+            fill="tonexty",
+            fillcolor="rgba(29, 78, 216, 0.14)",
+            name="Confidence band",
         )
-
-    if "_roll_std_" in feature_name:
-        sensor_name = feature_name.split("_roll_std_")[0]
-        return (
-            f"Five-cycle rolling standard deviation for {sensor_name}.",
-            "Rising variability can signal instability before a clearer fault trend appears.",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=prediction_frame["cycle"],
+            y=prediction_frame["predicted_rul_raw"],
+            mode="lines",
+            line={"color": "rgba(100, 116, 139, 0.55)", "width": 1.6, "dash": "dot"},
+            name="Raw prediction",
         )
-
-    if feature_name.endswith("_trend"):
-        sensor_name = feature_name.removesuffix("_trend")
-        return (
-            f"Cycle-to-cycle change for {sensor_name}.",
-            "Trend features capture whether a sensor is currently drifting toward a faulty state.",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=prediction_frame["cycle"],
+            y=prediction_frame["predicted_rul"],
+            mode="lines+markers",
+            line={"color": "#1d4ed8", "width": 3},
+            marker={"size": 6, "color": "#0f172a"},
+            name="Smoothed prediction",
         )
-
-    return (
-        f"Raw measurement from {feature_name}.",
-        "Raw sensors preserve the original physical signal that the engineered features build on top of.",
     )
+    fig.add_hline(y=50, line_dash="dot", line_color="#12715b", opacity=0.65)
+    fig.add_hline(y=20, line_dash="dot", line_color="#b7791f", opacity=0.65)
+    fig.update_layout(
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        height=380,
+        template="plotly_white",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.0},
+        xaxis_title="Cycle",
+        yaxis_title="Predicted RUL",
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="rgba(148, 163, 184, 0.25)")
+    return fig
 
 
-def build_feature_explanation_table(feature_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
-    top_features = feature_df.head(top_n).copy()
-    explanations = [describe_feature(name) for name in top_features["feature"]]
-    top_features["explanation"] = [item[0] for item in explanations]
-    top_features["insight"] = [item[1] for item in explanations]
-    return top_features
+def build_sensor_figure(clean_frame, sensor_name: str) -> go.Figure:
+    sensor_view = clean_frame.sort_values("cycle").copy()
+    sensor_view["rolling_mean"] = sensor_view[sensor_name].rolling(window=5, min_periods=1).mean()
 
-
-def render_graph_explainer(what_it_shows: str, how_it_works: str, why_it_matters: str) -> None:
-    st.markdown("**What it shows**")
-    st.write(what_it_shows)
-    st.markdown("**How it works**")
-    st.write(how_it_works)
-    st.markdown("**Why it matters**")
-    st.write(why_it_matters)
-
-
-def render_technical_context() -> None:
-    with st.expander("Technical Problem Statement", expanded=False):
-        st.markdown(
-            """
-            This project solves a prognostics regression problem on the NASA CMAPSS FD001 subset.
-
-            Each engine is represented as a multivariate time-series trajectory:
-            - `x_(i,t) = [settings_(i,t), sensors_(i,t)]`
-            - `i` identifies the engine
-            - `t` identifies the operating cycle
-
-            In the training set, each engine is observed until failure, so row-level Remaining Useful Life is defined as:
-            - `RUL_(i,t) = T_fail,i - t`
-
-            In the test set, each trajectory is right-censored before failure. The file `RUL_FD001.txt` provides the
-            remaining cycles after the final observed cycle for each engine, which allows reconstruction of row-level
-            targets across the full truncated trajectory.
-
-            The learning objective is to estimate a function:
-            - `f(x_(i,1:t)) -> RUL_(i,t)`
-
-            This is operationally important because an accurate RUL estimate supports condition-based maintenance,
-            reduces unplanned downtime, and lowers the risk of letting a degrading engine operate too close to failure.
-            """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=sensor_view["cycle"],
+            y=sensor_view[sensor_name],
+            mode="lines",
+            line={"color": "rgba(2, 132, 199, 0.45)", "width": 2},
+            name="Raw sensor",
         )
-
-    with st.expander("Methodology", expanded=False):
-        st.markdown(
-            """
-            The modeling pipeline follows a standard prognostics workflow:
-
-            1. Load the FD001 train, test, and RUL target files from the local `data/` directory.
-            2. Assign the CMAPSS schema:
-               `engine_id`, `cycle`, `setting_1..3`, `sensor_1..21`.
-            3. Compute row-level RUL:
-               - training from each engine's observed failure cycle
-               - test from the provided terminal RUL offsets
-            4. Remove constant or non-informative sensors that do not contribute meaningful degradation signal.
-            5. Engineer temporal features per engine:
-               - rolling mean with window size 5
-               - rolling standard deviation with window size 5
-               - first-order difference trend
-            6. Standardize model inputs with `StandardScaler` fitted on the training split only.
-            7. Train a `RandomForestRegressor` as the main nonlinear model.
-            8. Train a `LinearRegression` baseline for comparison.
-            9. Evaluate with:
-               - RMSE for large-error sensitivity
-               - MAE for average absolute error
-               - Pearson correlation coefficient for trend alignment
-
-            The Random Forest is suitable here because it can learn nonlinear interactions between operating settings,
-            raw sensors, smoothed signals, and local trends without requiring deep sequence models or heavy training cost.
-            """
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=sensor_view["cycle"],
+            y=sensor_view["rolling_mean"],
+            mode="lines",
+            line={"color": "#0f766e", "width": 3},
+            name="5-cycle rolling mean",
         )
-
-
-def render_overview_metrics(result: dict) -> None:
-    baseline_rmse = result["baseline_metrics"]["rmse"]
-    rmse_gain = baseline_rmse - result["rmse"]
-
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    metric_col1.metric("Random Forest RMSE", f"{result['rmse']:.3f}", delta=f"{rmse_gain:.3f} vs baseline")
-    metric_col2.metric("Random Forest MAE", f"{result['mae']:.3f}")
-    metric_col3.metric("Correlation Coefficient", f"{result['correlation_coefficient']:.3f}")
-    metric_col4.metric("Removed Sensors", str(len(result["removed_sensors"])))
-
-
-def render_baseline_comparison(result: dict) -> None:
-    st.subheader("Baseline Comparison")
-    comparison_df = result["comparison_df"].copy()
-    numeric_cols = ["rmse", "mae", "correlation_coefficient"]
-    comparison_df[numeric_cols] = comparison_df[numeric_cols].round(3)
-    st.dataframe(comparison_df, hide_index=True)
-    render_graph_explainer(
-        "A side-by-side comparison of the Random Forest and a simpler linear baseline using RMSE, MAE, and correlation.",
-        "Both models are trained on the same engineered feature set, then evaluated on the same test trajectories so the comparison stays fair.",
-        "It validates whether the main model is learning real nonlinear degradation behavior instead of only reproducing a simple global trend.",
     )
-
-
-def render_rul_distribution(train_df: pd.DataFrame, bins: int) -> None:
-    st.subheader("1. RUL Distribution")
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(train_df["rul"], bins=bins, color="#2c7be5", alpha=0.85, edgecolor="white")
-    ax.set_xlabel("Remaining Useful Life")
-    ax.set_ylabel("Count")
-    ax.set_title("Training RUL Distribution")
-    ax.grid(alpha=0.2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        "The distribution of row-level RUL values in the training data.",
-        "Each bar counts how many training observations fall into a given RUL interval after row-level targets are computed from engine failure cycles.",
-        "It helps diagnose target imbalance. If the distribution is heavily skewed, the model may become better at common life stages and weaker at rare ones.",
+    fig.update_layout(
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        height=380,
+        template="plotly_white",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.0},
+        xaxis_title="Cycle",
+        yaxis_title=sensor_name,
+        hovermode="x unified",
     )
-
-
-def render_degradation_curve(
-    train_df: pd.DataFrame,
-    sensor_columns: list[str],
-    selected_engine: int,
-    selected_sensor: str,
-) -> None:
-    st.subheader("2. Sensor Degradation Curve")
-    curve_df = get_sensor_curve(train_df, selected_engine, selected_sensor)
-    smooth_curve = curve_df[selected_sensor].rolling(window=5, min_periods=1).mean()
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(curve_df["cycle"], curve_df[selected_sensor], color="#9d4edd", alpha=0.45, label="Raw sensor")
-    ax.plot(curve_df["cycle"], smooth_curve, color="#5a189a", linewidth=2.2, label="5-cycle rolling mean")
-    ax.set_xlabel("Cycle")
-    ax.set_ylabel(selected_sensor)
-    ax.set_title(f"{selected_sensor} over Time for Engine {selected_engine}")
-    ax.legend()
-    ax.grid(alpha=0.2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        f"The trajectory of {selected_sensor} across cycles for engine {selected_engine}, including raw values and a smoothed rolling mean.",
-        "The chart isolates one engine, orders rows by cycle, and overlays the original sensor with its 5-cycle rolling average to suppress short-term noise.",
-        "It reveals whether the sensor carries a monotonic drift, volatility increase, or regime change that could act as a degradation signature.",
-    )
-
-
-def render_feature_importance(feature_df: pd.DataFrame, top_n: int) -> None:
-    st.subheader("3. Feature Importance")
-    top_features = feature_df.head(top_n).sort_values("importance", ascending=True)
-
-    fig, ax = plt.subplots(figsize=(9, max(4, top_n * 0.45)))
-    ax.barh(top_features["feature"], top_features["importance"], color="#00a896")
-    ax.set_xlabel("Importance")
-    ax.set_title(f"Top {top_n} Features")
-    ax.grid(axis="x", alpha=0.2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        "The highest-impact features used by the Random Forest during RUL estimation.",
-        "Random Forest feature importance is computed from the average impurity reduction contributed by each feature across all decision trees.",
-        "It identifies which sensors and engineered temporal descriptors carry the strongest predictive signal, which is useful for model interpretation and sensor prioritization.",
-    )
-
-    st.markdown("**Feature Explanation + Insights**")
-    explanation_df = build_feature_explanation_table(feature_df, top_n)
-    explanation_df["importance"] = explanation_df["importance"].round(4)
-    st.dataframe(explanation_df[["feature", "importance", "explanation", "insight"]], hide_index=True)
-
-
-def render_prediction_line_plot(
-    prediction_df: pd.DataFrame,
-    sample_window: tuple[int, int],
-    show_baseline: bool,
-) -> None:
-    st.subheader("4. Actual vs Predicted Line Plot")
-    start_idx, end_idx = sample_window
-    window_df = prediction_df.iloc[start_idx : end_idx + 1]
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(window_df["sample_index"], window_df["actual_rul"], label="Actual RUL", linewidth=2)
-    ax.plot(
-        window_df["sample_index"],
-        window_df["random_forest_predicted_rul"],
-        label="Random Forest",
-        linewidth=2,
-    )
-    if show_baseline:
-        ax.plot(
-            window_df["sample_index"],
-            window_df["baseline_predicted_rul"],
-            label="Linear Baseline",
-            linewidth=1.8,
-            linestyle="--",
-        )
-    ax.set_xlabel("Test Sample Index")
-    ax.set_ylabel("RUL")
-    ax.set_title("Predicted RUL vs Actual RUL")
-    ax.legend()
-    ax.grid(alpha=0.2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        "A sequential comparison between true RUL and model-predicted RUL over a selected slice of the test set.",
-        "The plot draws actual RUL and predicted RUL against sample index, with an optional baseline overlay for direct visual comparison.",
-        "It shows where the model follows the degradation path well and where it systematically lags, overshoots, or smooths sharp transitions.",
-    )
-
-
-def render_scatter_plot(prediction_df: pd.DataFrame, model_choice: str, correlation_value: float) -> None:
-    st.subheader("5. Scatter Plot")
-    pred_column = (
-        "random_forest_predicted_rul"
-        if model_choice == "Random Forest"
-        else "baseline_predicted_rul"
-    )
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(
-        prediction_df["actual_rul"],
-        prediction_df[pred_column],
-        alpha=0.55,
-        color="#007f5f",
-    )
-    bounds = [
-        min(prediction_df["actual_rul"].min(), prediction_df[pred_column].min()),
-        max(prediction_df["actual_rul"].max(), prediction_df[pred_column].max()),
-    ]
-    ax.plot(bounds, bounds, linestyle="--", color="black", linewidth=1)
-    ax.set_xlabel("Actual RUL")
-    ax.set_ylabel(f"{model_choice} Predicted RUL")
-    ax.set_title(f"{model_choice}: Actual vs Predicted")
-    ax.grid(alpha=0.2)
-    ax.text(
-        0.05,
-        0.95,
-        f"Pearson r = {correlation_value:.3f}",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "none"},
-    )
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        f"The relationship between actual RUL and {model_choice} predicted RUL for all test samples.",
-        "Each point represents one test observation. The dashed diagonal is the ideal line where predicted RUL equals actual RUL, and Pearson correlation summarizes linear alignment.",
-        "It helps distinguish calibration quality from pure trend following. Tight concentration around the diagonal indicates stronger predictive consistency.",
-    )
-
-
-def render_residual_distribution(prediction_df: pd.DataFrame, model_choice: str, bins: int) -> None:
-    st.subheader("6. Residual Error Distribution")
-    residual_column = (
-        "random_forest_residual"
-        if model_choice == "Random Forest"
-        else "baseline_residual"
-    )
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(prediction_df[residual_column], bins=bins, color="#e55353", alpha=0.85, edgecolor="white")
-    ax.axvline(0, color="black", linestyle="--", linewidth=1)
-    ax.set_xlabel("Actual - Predicted")
-    ax.set_ylabel("Count")
-    ax.set_title(f"{model_choice} Residual Distribution")
-    ax.grid(alpha=0.2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    render_graph_explainer(
-        f"The distribution of prediction errors for the {model_choice} model.",
-        "Residuals are computed as `actual RUL - predicted RUL`. The histogram shows how often the model underpredicts or overpredicts by different magnitudes.",
-        "A narrow distribution centered near zero indicates lower bias and tighter error spread, while wide tails indicate unstable performance on some operating conditions or engines.",
-    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="rgba(148, 163, 184, 0.25)")
+    return fig
 
 
 def main() -> None:
-    st.set_page_config(page_title="NASA CMAPSS RUL Dashboard", layout="wide")
-    st.title("Remaining Useful Life Prediction Dashboard")
-    st.caption("Default source: NASA CMAPSS FD001 turbofan dataset from local project files")
+    st.set_page_config(
+        page_title="Turbofan Engine RUL Prediction Dashboard",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    inject_styles()
+    render_header()
 
-    if "training_result" not in st.session_state:
-        st.session_state.training_result = None
-
-    with st.sidebar:
-        st.header("Default Dataset")
-        st.caption("Using local files from the `data/` folder:")
-        st.code("train_FD001.txt\ntest_FD001.txt\nRUL_FD001.txt")
-        retrain_model = st.button("Retrain Model")
-
-    if st.session_state.training_result is None or retrain_model:
-        with st.spinner("Training Random Forest on default FD001 data..."):
-            st.session_state.training_result = run_default_training()
-
-    result = st.session_state.training_result
-    prediction_df = result["predictions_df"]
-    engine_ids = result["train_df"]["engine_id"].drop_duplicates().sort_values().tolist()
-    sensor_columns = result["sensor_columns"]
+    try:
+        model_assets = load_model()
+    except Exception as exc:
+        st.error(f"Unable to load the saved model assets: {exc}")
+        st.stop()
 
     with st.sidebar:
-        st.divider()
-        st.header("Dynamic Controls")
-        hist_bins = st.slider("RUL histogram bins", min_value=10, max_value=60, value=30, step=5)
-        default_sensor_index = sensor_columns.index("sensor_11") if "sensor_11" in sensor_columns else 0
-        selected_engine = st.selectbox("Engine for degradation curve", engine_ids, index=0)
-        selected_sensor = st.selectbox("Sensor for degradation curve", sensor_columns, index=default_sensor_index)
-        top_n_features = st.slider("Top features to display", min_value=5, max_value=20, value=10, step=1)
-        line_plot_end = min(250, len(prediction_df) - 1)
-        sample_window = st.slider(
-            "Sample window for line plot",
-            min_value=0,
-            max_value=len(prediction_df) - 1,
-            value=(0, line_plot_end),
+        st.header("Controls")
+        input_mode = st.radio("Input mode", ["Upload CSV", "Demo Engine Selector"])
+        sequence_length = st.slider(
+            "Window size",
+            min_value=30,
+            max_value=60,
+            value=DEFAULT_SEQUENCE_LENGTH,
+            step=5,
+            help="Minimum cycles required before the dashboard can issue a prediction.",
         )
-        show_baseline = st.checkbox("Overlay baseline on line plot", value=True)
-        comparison_model = st.radio("Model for scatter and residual charts", ["Random Forest", "Linear Baseline"])
-        residual_bins = st.slider("Residual histogram bins", min_value=10, max_value=60, value=30, step=5)
 
-    render_technical_context()
-    render_overview_metrics(result)
-    render_baseline_comparison(result)
+        with st.expander("Expected CSV schema", expanded=False):
+            st.code(", ".join(UPLOAD_REQUIRED_COLUMNS), language="text")
 
-    chart_col1, chart_col2 = st.columns(2)
+        source_frame = None
+        source_label = ""
+        if input_mode == "Upload CSV":
+            uploaded_file = st.file_uploader("Upload engine CSV", type=["csv"])
+            if uploaded_file is not None:
+                source_label = uploaded_file.name
+                try:
+                    source_frame = load_data(uploaded_file.getvalue(), file_name=uploaded_file.name)
+                except Exception as exc:
+                    st.error(f"Invalid file. The CSV could not be parsed: {exc}")
+        else:
+            demo_data = load_demo_dataset(DEMO_DATA_PATH)
+            engine_ids = sorted(demo_data["engine_id"].unique().tolist())
+            selected_engine = st.selectbox("Demo engine", engine_ids, index=0)
+            source_frame = demo_data.loc[demo_data["engine_id"] == selected_engine].copy()
+            source_label = f"NASA FD001 demo engine {selected_engine}"
+            st.caption(f"{len(source_frame)} cycles available")
+
+    if source_frame is None:
+        render_empty_state()
+        st.stop()
+
+    try:
+        prepared = prepare_inference_data(
+            source=source_frame,
+            scaler=model_assets.scaler,
+            feature_columns=model_assets.feature_columns,
+            sensor_columns=model_assets.sensor_columns,
+            sequence_length=sequence_length,
+        )
+    except InvalidSchemaError as exc:
+        st.warning(str(exc))
+        st.stop()
+    except InsufficientCyclesError as exc:
+        st.warning(str(exc))
+        st.stop()
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
+    except Exception as exc:
+        st.error(f"Unexpected preprocessing error: {exc}")
+        st.stop()
+
+    prediction_output = predict_rul(model_assets.model, prepared["windows"])
+    prediction_frame = build_prediction_frame(
+        window_index=prepared["window_index"],
+        predictions=prediction_output["prediction"],
+        uncertainty=prediction_output["uncertainty"],
+        smoothing_window=5,
+    )
+
+    reference_bounds = load_training_feature_bounds(
+        TRAIN_REFERENCE_PATH,
+        tuple(model_assets.sensor_columns),
+        tuple(model_assets.feature_columns),
+    )
+    drift_summary = assess_training_range_deviation(
+        feature_frame=prepared["engineered_frame"].loc[:, model_assets.feature_columns],
+        reference_bounds=reference_bounds,
+        scaled_feature_frame=prepared["normalized_frame"].loc[:, model_assets.feature_columns],
+    )
+
+    current_rul = float(prediction_frame["predicted_rul"].iloc[-1])
+    current_uncertainty = float(prediction_frame["prediction_uncertainty"].iloc[-1])
+    risk_summary = classify_risk(current_rul)
+    sensor_columns = [col for col in prepared["clean_frame"].columns if col.startswith("sensor_")]
+    default_sensor_index = sensor_columns.index(DEFAULT_SENSOR) if DEFAULT_SENSOR in sensor_columns else 0
+
+    info_col1, info_col2, info_col3 = st.columns([2.1, 1, 1])
+    info_col1.caption(f"Data source: {source_label}")
+    info_col2.caption(f"Cycles ingested: {len(prepared['clean_frame'])}")
+    info_col3.caption(f"Prediction windows: {len(prediction_frame)}")
+
+    if drift_summary["warning"]:
+        st.warning(
+            "Model Confidence Warning: Prediction may be unreliable. "
+            f"{drift_summary['outside_feature_pct']:.1f}% of engineered features are outside the training range."
+        )
+
+    if risk_summary["level"] == "Red":
+        st.error("Critical risk detected. Predicted RUL is below 20 cycles and should be treated as urgent.")
+
+    with st.container(border=True):
+        st.subheader("Prediction Summary")
+        st.markdown(
+            '<p class="section-note">Latest estimate based on the most recent validated prediction window.</p>',
+            unsafe_allow_html=True,
+        )
+        summary_col1, summary_col2, summary_col3 = st.columns([1.25, 1, 1])
+        with summary_col1:
+            render_summary_card(
+                title="Predicted RUL",
+                value=f"{current_rul:.0f} cycles",
+                subtitle="Smoothed forecast for the latest available cycle",
+                accent="#1d4ed8",
+            )
+        with summary_col2:
+            render_summary_card(
+                title="Confidence Interval",
+                value=f"{current_rul:.0f} +/- {current_uncertainty:.0f}",
+                subtitle="Prediction variance estimated from the ensemble spread",
+                accent="#0f766e",
+            )
+        with summary_col3:
+            render_status_card(risk_summary)
+
+        detail_col1, detail_col2, detail_col3, detail_col4 = st.columns(4)
+        detail_col1.metric("Latest cycle", f"{int(prediction_frame['cycle'].iloc[-1])}")
+        detail_col2.metric("Missing values repaired", f"{prepared['missing_value_count']}")
+        detail_col3.metric("Out-of-range features", f"{drift_summary['outside_feature_pct']:.1f}%")
+        detail_col4.metric("Model features used", f"{len(model_assets.feature_columns)}")
+
+    chart_col1, chart_col2 = st.columns([1.2, 1.0])
+
     with chart_col1:
-        render_rul_distribution(result["train_df"], hist_bins)
+        with st.container(border=True):
+            st.subheader("RUL Trend Graph")
+            st.markdown(
+                '<p class="section-note">Predicted Remaining Useful Life across the engine trajectory.</p>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(build_rul_trend_figure(prediction_frame), use_container_width=True)
+
     with chart_col2:
-        render_degradation_curve(result["train_df"], sensor_columns, selected_engine, selected_sensor)
+        with st.container(border=True):
+            st.subheader("Sensor Visualization")
+            st.markdown(
+                '<p class="section-note">Inspect raw sensor behavior against a short rolling mean for context.</p>',
+                unsafe_allow_html=True,
+            )
+            selected_sensor = st.selectbox("Select sensor", sensor_columns, index=default_sensor_index)
+            st.plotly_chart(
+                build_sensor_figure(prepared["clean_frame"], selected_sensor),
+                use_container_width=True,
+            )
 
-    render_feature_importance(result["feature_importance_df"], top_n_features)
-
-    chart_col3, chart_col4 = st.columns(2)
-    with chart_col3:
-        render_prediction_line_plot(prediction_df, sample_window, show_baseline)
-    with chart_col4:
-        correlation_value = (
-            result["correlation_coefficient"]
-            if comparison_model == "Random Forest"
-            else result["baseline_metrics"]["correlation_coefficient"]
+    with st.container(border=True):
+        st.subheader("Data Preview")
+        st.markdown(
+            '<p class="section-note">Validated and cleaned engine records used for inference.</p>',
+            unsafe_allow_html=True,
         )
-        render_scatter_plot(prediction_df, comparison_model, correlation_value)
-
-    render_residual_distribution(prediction_df, comparison_model, residual_bins)
-
-    st.subheader("Prediction Sample")
-    prediction_preview = prediction_df[
-        [
-            "sample_index",
-            "engine_id",
-            "cycle",
-            "actual_rul",
-            "random_forest_predicted_rul",
-            "baseline_predicted_rul",
-            "random_forest_residual",
-            "baseline_residual",
-        ]
-    ].head(20)
-    st.dataframe(prediction_preview, hide_index=True)
+        st.dataframe(prepared["clean_frame"], use_container_width=True, height=340)
 
 
 if __name__ == "__main__":
